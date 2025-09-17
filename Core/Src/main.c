@@ -128,7 +128,7 @@ int main(void)
         {
           fase = 1;
           HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_SET); // LED arranque encendido
-          pitido(300); // pitido de 300 ms
+          pitido(1500); // pitido de 1500 ms (EV 4.12.1 en 2025_1.1 indica que el tiempo debe de ser de 1s a 3s entre 80 y 90 db)
         }
       }
       else
@@ -275,7 +275,7 @@ void verificar_estado_LV(void) {
   GPIO_PinState estado_ams      = HAL_GPIO_ReadPin(AMS_GPIO_Port, AMS_Pin);
   GPIO_PinState estado_tsms     = HAL_GPIO_ReadPin(TSMS_GPIO_Port, TSMS_Pin);
 
-  // Comprobar si todo está seguro (RESET = seguro)
+  // Comprobar si todo está seguro (reset = seguro)
   if (estado_internal == GPIO_PIN_RESET &&
       estado_imd == GPIO_PIN_RESET &&
       estado_ams == GPIO_PIN_RESET &&
