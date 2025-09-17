@@ -31,7 +31,9 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+uint8_t estado_seguro = 0; // 1 = seguro, 0 = fallo
+uint32_t startTick = 0;  // para medir los 3s
+uint8_t fase = 0;        // variable de fase: 0 = espera, 1 = arrancado
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -67,8 +69,6 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
-  uint32_t startTick = 0;  // para medir los 3s
-  uint8_t fase = 0;        // variable de fase: 0 = espera, 1 = arrancado
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -90,7 +90,26 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
+  GPIO_PinState estado_internal = HAL_GPIO_ReadPin(Internal_GPIO_Port, Internal_Pin);
+  GPIO_PinState estado_imd      = HAL_GPIO_ReadPin(IMD_GPIO_Port, IMD_Pin);
+  GPIO_PinState estado_ams      = HAL_GPIO_ReadPin(AMS_GPIO_Port, AMS_Pin);
+  GPIO_PinState estado_tsms     = HAL_GPIO_ReadPin(TSMS_GPIO_Port, TSMS_Pin);
 
+  if (estado_internal == GPIO_PIN_RESET &&
+      estado_imd == GPIO_PIN_RESET &&
+      estado_ams == GPIO_PIN_RESET &&
+      estado_tsms == GPIO_PIN_RESET)
+  {
+    estado_seguro = 1;
+    HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_RESET); // LED apagado = seguro
+  }
+  else
+  {
+    estado_seguro = 0;
+    HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_SET);   // LED encendido = fallo
+    HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_RESET); // LED arranque apagado
+
+  }
   /* USER CODE END 2 */
 
   /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
@@ -109,28 +128,52 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-  while (fase == 0)
+  while (1)
   {
-    GPIO_PinState btn1 = HAL_GPIO_ReadPin(Freno_GPIO_Port, Freno_Pin);
-    GPIO_PinState btn2 = HAL_GPIO_ReadPin(Arranque_GPIO_Port, Arranque_Pin);
+    // Verificar continuamente estado seguro
+    estado_internal = HAL_GPIO_ReadPin(Internal_GPIO_Port, Internal_Pin);
+    estado_imd      = HAL_GPIO_ReadPin(IMD_GPIO_Port, IMD_Pin);
+    estado_ams      = HAL_GPIO_ReadPin(AMS_GPIO_Port, AMS_Pin);
+    estado_tsms     = HAL_GPIO_ReadPin(TSMS_GPIO_Port, TSMS_Pin);
 
-    if (btn1 == GPIO_PIN_RESET && btn2 == GPIO_PIN_RESET) // pulsamos freno y arranque a la vez
+    if (estado_internal == GPIO_PIN_RESET &&
+        estado_imd == GPIO_PIN_RESET &&
+        estado_ams == GPIO_PIN_RESET &&
+        estado_tsms == GPIO_PIN_RESET)
     {
-      if (startTick == 0)
-      {
-        startTick = HAL_GetTick(); // empezar a contar
-      }
-
-      if (HAL_GetTick() - startTick >= 3000) // 3 segundos
-      {
-        fase = 1; // pasar a siguiente fase
-        HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_SET); // encender LED de estado (a modo visual)
-      }
+      estado_seguro = 1;
+      HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_RESET); // LED apagado = seguro
     }
     else
     {
-      startTick = 0; // reiniciar si se suelta un botón
+      estado_seguro = 0;
+      fase = 0; // Reiniciar arranque si no es seguro
+      startTick = 0;
+      HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_SET); // LED encendido = fallo
     }
+
+    // Solo permitir arranque si sistema seguro y fase 0
+    if (estado_seguro && fase == 0)
+    {
+      GPIO_PinState btn1 = HAL_GPIO_ReadPin(Freno_GPIO_Port, Freno_Pin);
+      GPIO_PinState btn2 = HAL_GPIO_ReadPin(Arranque_GPIO_Port, Arranque_Pin);
+
+      if (btn1 == GPIO_PIN_RESET && btn2 == GPIO_PIN_RESET)
+      {
+        if (startTick == 0) startTick = HAL_GetTick(); // Empezar a contar
+        if (HAL_GetTick() - startTick >= 3000) // Mantener 3 segundos
+        {
+          fase = 1;
+          HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_SET); // LED arranque encendido
+        }
+      }
+      else
+      {
+        startTick = 0; // Reiniciar contador si se suelta un botón
+      }
+    }
+
+    HAL_Delay(10); // Evitar saturar el MCU
   }
 
   /* USER CODE END 3 */
@@ -232,13 +275,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : PA9 PA10 PA11 PA12 */
-  GPIO_InitStruct.Pin = GPIO_PIN_9|GPIO_PIN_10|GPIO_PIN_11|GPIO_PIN_12;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  /*Configure GPIO pins : Internal_Pin IMD_Pin AMS_Pin TSMS_Pin */
+  GPIO_InitStruct.Pin = Internal_Pin|IMD_Pin|AMS_Pin|TSMS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING; // si quieres detectar conexión y desconexión
+  GPIO_InitStruct.Pull = GPIO_PULLUP;                 // evita flotar
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI9_5_IRQn);
+
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
@@ -248,6 +294,47 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+/*void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == Internal_Pin || GPIO_Pin == IMD_Pin ||
+      GPIO_Pin == AMS_Pin || GPIO_Pin == TSMS_Pin)
+  {
+    GPIO_PinState estado = HAL_GPIO_ReadPin(GPIOA, GPIO_Pin);
+    HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin,
+                      (estado == GPIO_PIN_RESET) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+  }
+}*/
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if (GPIO_Pin == Internal_Pin || GPIO_Pin == IMD_Pin ||
+      GPIO_Pin == AMS_Pin || GPIO_Pin == TSMS_Pin)
+  {
+    // Actualizar estado seguro al cambiar algún pin
+    GPIO_PinState estado_internal = HAL_GPIO_ReadPin(Internal_GPIO_Port, Internal_Pin);
+    GPIO_PinState estado_imd      = HAL_GPIO_ReadPin(IMD_GPIO_Port, IMD_Pin);
+    GPIO_PinState estado_ams      = HAL_GPIO_ReadPin(AMS_GPIO_Port, AMS_Pin);
+    GPIO_PinState estado_tsms     = HAL_GPIO_ReadPin(TSMS_GPIO_Port, TSMS_Pin);
+
+    if (estado_internal == GPIO_PIN_RESET &&
+        estado_imd == GPIO_PIN_RESET &&
+        estado_ams == GPIO_PIN_RESET &&
+        estado_tsms == GPIO_PIN_RESET)
+    {
+      estado_seguro = 1;
+      HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_RESET); // LED apagado = seguro
+    }
+    else
+    {
+      estado_seguro = 0;
+      fase = 0;
+      startTick = 0;
+      HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_SET); // LED encendido = fallo
+      HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_RESET); // LED arranque apagado
+
+    }
+  }
+}
 
 /* USER CODE END 4 */
 
