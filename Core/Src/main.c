@@ -60,6 +60,20 @@ static void MX_GPIO_Init(void);
 /* USER CODE BEGIN 0 */
 void verificar_estado_LV();
 void pitido(uint16_t duracion_ms);
+void reinicio_sistema();
+void pitido_start(uint16_t duracion_ms);
+void pitido_update(void);
+void pitido_stop(void);
+
+typedef struct {
+  uint8_t activo;
+  uint32_t start_time;
+  uint16_t duracion;
+} Pitido_t;
+Pitido_t buzzer = {0, 0, 0};
+
+
+
 
 /* USER CODE END 0 */
 
@@ -128,7 +142,7 @@ int main(void)
         {
           fase = 1;
           HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_SET); // LED arranque encendido
-          pitido(1500); // pitido de 1500 ms (EV 4.12.1 en 2025_1.1 indica que el tiempo debe de ser de 1s a 3s entre 80 y 90 db)
+          pitido_start(1500); // pitido de 1500 ms (EV 4.12 en 2025_1.1 indica que el tiempo debe de ser de 1s a 3s entre 80 y 90 db)
         }
       }
       else
@@ -136,8 +150,7 @@ int main(void)
         startTick = 0; // Reiniciar contador si se suelta un botón
       }
     }
-
-    HAL_Delay(10); // Evitar saturar el MCU
+    pitido_update();
   }
 
   /* USER CODE END 3 */
@@ -268,6 +281,24 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void pitido_start(uint16_t duracion_ms) {
+  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_SET);
+  buzzer.start_time = HAL_GetTick();
+  buzzer.duracion = duracion_ms;
+  buzzer.activo = 1;
+}
+
+void pitido_update(void) {
+  if (buzzer.activo && (HAL_GetTick() - buzzer.start_time >= buzzer.duracion)) {
+    HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
+    buzzer.activo = 0;
+  }
+}
+void pitido_stop(void) {
+  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
+  buzzer.activo = 0;
+}
+
 void verificar_estado_LV(void) {
   // Leer todos los pines
   GPIO_PinState estado_internal = HAL_GPIO_ReadPin(Internal_GPIO_Port, Internal_Pin);
@@ -284,20 +315,23 @@ void verificar_estado_LV(void) {
     estado_seguro = 1;
     HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_RESET); // LED apagado = seguro
   }
-  else
-  {
-    estado_seguro = 0;
-    fase = 0;
-    startTick = 0;
-    HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_SET); // LED encendido = fallo
-    HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_RESET); // LED arranque apagado
+  else {
+    reinicio_sistema();
   }
 }
 
-void pitido(uint16_t duracion_ms) {
-  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_SET); // encender buzzer
-  HAL_Delay(duracion_ms);
-  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET); // apagar buzzer
+void reinicio_sistema() {
+
+  estado_seguro = 0;
+  fase = 0;
+  startTick = 0;
+
+  pitido_stop();
+  buzzer.start_time = 0;
+  buzzer.duracion = 0;
+
+  HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_SET); // LED encendido = fallo
+  HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_RESET); // LED arranque apagado
 }
 
 
