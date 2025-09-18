@@ -32,8 +32,10 @@
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
 uint8_t estado_seguro = 0; // 1 = seguro, 0 = fallo
-uint32_t startTick = 0;  // para medir los 3s
+uint32_t startTick = 0;  // para medir s
 uint8_t fase = 0;        // variable de fase: 0 = espera, 1 = arrancado
+uint8_t precarga = 0;        // variable de fase: 0 = espera, 1 = arrancado
+
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -58,13 +60,17 @@ static void MX_GPIO_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+//Funciones
 void verificar_estado_LV();
 void pitido(uint16_t duracion_ms);
 void reinicio_sistema();
 void pitido_start(uint16_t duracion_ms);
 void pitido_update(void);
 void pitido_stop(void);
+void estado_inicial_HV();
+void fase_precarga_inicio();
 
+//types
 typedef struct {
   uint8_t activo;
   uint32_t start_time;
@@ -72,8 +78,8 @@ typedef struct {
 } Pitido_t;
 Pitido_t buzzer = {0, 0, 0};
 
-
-
+typedef enum {ESPERA, ARRANQUE, PRECARGA, FUNCIONANDO} Estado_t;
+Estado_t estado = ESPERA;
 
 /* USER CODE END 0 */
 
@@ -107,6 +113,9 @@ int main(void)
   MX_GPIO_Init();
   /* USER CODE BEGIN 2 */
   verificar_estado_LV();
+  estado_inicial_HV();
+
+
   /* USER CODE END 2 */
 
   /* Initialize COM1 port (115200, 8 bits (7-bit data + 1 stop bit), no parity */
@@ -128,9 +137,11 @@ int main(void)
   while (1)
   {
     verificar_estado_LV();
+    pitido_update();
+    HAL_Delay(1);
 
     // Solo permitir arranque si sistema seguro y fase 0
-    if (estado_seguro && fase == 0)
+    if (estado_seguro && estado == ESPERA)
     {
       GPIO_PinState btn1 = HAL_GPIO_ReadPin(Freno_GPIO_Port, Freno_Pin); //Estado del boton del freno
       GPIO_PinState btn2 = HAL_GPIO_ReadPin(Arranque_GPIO_Port, Arranque_Pin); //Estado del boton de arranque
@@ -140,7 +151,7 @@ int main(void)
         if (startTick == 0) startTick = HAL_GetTick(); // Empezar a contar
         if (HAL_GetTick() - startTick >= 3000) // Mantener 3 segundos
         {
-          fase = 1;
+          estado = ARRANQUE;
           HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_SET); // LED arranque encendido
           pitido_start(1500); // pitido de 1500 ms (EV 4.12 en 2025_1.1 indica que el tiempo debe de ser de 1s a 3s entre 80 y 90 db)
         }
@@ -150,7 +161,11 @@ int main(void)
         startTick = 0; // Reiniciar contador si se suelta un botón
       }
     }
-    pitido_update();
+    if (!buzzer.activo && estado == ARRANQUE) {
+      estado = PRECARGA;  // Cambiar estado a precarga
+      fase_precarga_inicio();
+    }
+
   }
 
   /* USER CODE END 3 */
@@ -221,13 +236,13 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, Led_aviso1_Pin|Led_aviso2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, Led_aviso1_Pin|Led_aviso2_Pin|Descarga_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LD2_GPIO_Port, LD2_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LD2_Pin|AIR__Pin|AIR_A7_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, Precarga_Pin|Buzzer_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -235,19 +250,26 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(B1_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : Led_aviso1_Pin Led_aviso2_Pin */
-  GPIO_InitStruct.Pin = Led_aviso1_Pin|Led_aviso2_Pin;
+  /*Configure GPIO pins : Led_aviso1_Pin Led_aviso2_Pin Descarga_Pin */
+  GPIO_InitStruct.Pin = Led_aviso1_Pin|Led_aviso2_Pin|Descarga_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : LD2_Pin */
-  GPIO_InitStruct.Pin = LD2_Pin;
+  /*Configure GPIO pins : LD2_Pin AIR__Pin AIR_A7_Pin */
+  GPIO_InitStruct.Pin = LD2_Pin|AIR__Pin|AIR_A7_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LD2_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : Precarga_Pin Buzzer_Pin */
+  GPIO_InitStruct.Pin = Precarga_Pin|Buzzer_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pins : Arranque_Pin Freno_Pin */
   GPIO_InitStruct.Pin = Arranque_Pin|Freno_Pin;
@@ -258,15 +280,8 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pins : Internal_Pin IMD_Pin AMS_Pin TSMS_Pin */
   GPIO_InitStruct.Pin = Internal_Pin|IMD_Pin|AMS_Pin|TSMS_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : Buzzer_Pin */
-  GPIO_InitStruct.Pin = Buzzer_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(Buzzer_GPIO_Port, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI9_5_IRQn, 0, 0);
@@ -297,6 +312,8 @@ void pitido_update(void) {
 void pitido_stop(void) {
   HAL_GPIO_WritePin(Buzzer_GPIO_Port, Buzzer_Pin, GPIO_PIN_RESET);
   buzzer.activo = 0;
+  buzzer.start_time = 0;
+  buzzer.duracion = 0;
 }
 
 void verificar_estado_LV(void) {
@@ -321,17 +338,28 @@ void verificar_estado_LV(void) {
 }
 
 void reinicio_sistema() {
-
   estado_seguro = 0;
-  fase = 0;
   startTick = 0;
+  estado = ESPERA;
 
   pitido_stop();
-  buzzer.start_time = 0;
-  buzzer.duracion = 0;
+  estado_inicial_HV();
 
   HAL_GPIO_WritePin(Led_aviso2_GPIO_Port, Led_aviso2_Pin, GPIO_PIN_SET); // LED encendido = fallo
   HAL_GPIO_WritePin(Led_aviso1_GPIO_Port, Led_aviso1_Pin, GPIO_PIN_RESET); // LED arranque apagado
+}
+
+void estado_inicial_HV() {
+  HAL_GPIO_WritePin(Descarga_GPIO_Port,Descarga_Pin,RESET); //LED simula rele normalmente cerrado
+  HAL_GPIO_WritePin(Precarga_GPIO_Port,Precarga_Pin,SET); //LED simula rele normalmente abierto
+  HAL_GPIO_WritePin(AIR__GPIO_Port,AIR__Pin,SET); //LED simula rele normalmente abierto
+  HAL_GPIO_WritePin(AIR_A7_GPIO_Port,AIR_A7_Pin,SET); //LED simula rele normalmente abierto
+}
+
+void fase_precarga_inicio()/*aqui es donde hay q activar los primeros reles*/ {
+  HAL_GPIO_WritePin(Descarga_GPIO_Port,Descarga_Pin,SET); //Se abre rele de descarga
+  HAL_GPIO_WritePin(AIR__GPIO_Port,AIR__Pin,RESET); //Se cierra el rele
+
 }
 
 
